@@ -14,7 +14,7 @@ lib = shared_library('tll-sqlite',
 )
 
 test('pytest', import('python').find_installation('python3')
-	, args: ['-m', 'pytest', '-vx', 'test.py']
+	, args: ['-m', 'pytest', '-vx', 'tests/']
 	, env: 'BUILD_DIR=@0@'.format(meson.current_build_dir())
 	, workdir: meson.current_source_dir()
 )

@@ -40,7 +40,7 @@ def context():
 
 @pytest.fixture
 def db_file(tmp_path):
-    return tmp_path / 'test.db'
+    return str(tmp_path / 'test.db')
 
 def test_insert_unique(context, db_file):
     db = sqlite3.connect(db_file)
