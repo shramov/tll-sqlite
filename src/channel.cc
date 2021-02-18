@@ -47,6 +47,7 @@ class SQLite : public tll::channel::Base<SQLite>
 
  public:
 	static constexpr std::string_view param_prefix() { return "sqlite"; }
+	static constexpr auto process_policy() { return ProcessPolicy::Never; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
 	int _open(const tll::PropsView &);
@@ -56,7 +57,8 @@ class SQLite : public tll::channel::Base<SQLite>
 	int _post(const tll_msg_t *msg, int flags);
 
  private:
-	int _create_table(const tll::scheme::Message *);
+	int _create_table(std::string_view table, const tll::scheme::Message *);
+	int _create_statement(std::string_view table, const tll::scheme::Message *);
 	int _create_index(const std::string_view &name, std::string_view key, bool unique);
 
 	sqlite3_stmt * _prepare(const std::string_view query)
@@ -109,8 +111,17 @@ int SQLite::_open(const PropsView &s)
 		return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(*_db));
 
 	for (auto & m : tll::util::list_wrap(_scheme->messages)) {
-		if (_create_table(&m))
-			return _log.fail(EINVAL, "Failed to create table for '{}'", m.name);
+		if (m.msgid == 0) {
+			_log.debug("Message {} has no msgid, skip table check", m.name);
+			continue;
+		}
+
+		auto table = tll::getter::get(m.options, "sql.table").value_or(std::string_view(m.name));
+
+		if (_create_table(table, &m))
+			return _log.fail(EINVAL, "Failed to create table '{}' for '{}'", table, m.name);
+		if (_create_statement(table, &m))
+			return _log.fail(EINVAL, "Failed to prepare SQL statement for '{}'", m.name);
 	}
 
 	return 0;
@@ -224,14 +235,8 @@ int sql_bind(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, const
 
 }
 
-int SQLite::_create_table(const tll::scheme::Message * msg)
+int SQLite::_create_table(std::string_view table, const tll::scheme::Message * msg)
 {
-	std::string_view table(msg->name);
-	if (msg->msgid == 0) {
-		_log.debug("Message {} has no msgid, skip table check", table);
-		return 0;
-	}
-
 	query_ptr_t sql = { nullptr, sqlite3_finalize };
 
 	sql.reset(_prepare("SELECT name FROM sqlite_master WHERE name=?"));
@@ -256,9 +261,9 @@ int SQLite::_create_table(const tll::scheme::Message * msg)
 			return _log.fail(EINVAL, "Message {} field {}: {}", msg->name, f.name, t.error());
 		fields.push_back(fmt::format("`{}` {} NOT NULL", f.name, *t));
 
-		auto pkey = tll::getter::getT(f.options, "primary-key", false);
+		auto pkey = tll::getter::getT(f.options, "sql.primary-key", false);
 		if (f.type == f.Pointer)
-			pkey = tll::getter::getT(f.type_ptr->options, "primary-key", false);
+			pkey = tll::getter::getT(f.type_ptr->options, "sql.primary-key", false);
 
 		if (!pkey)
 			_log.warning("Invalid primary-key option: {}", pkey.error());
@@ -275,22 +280,31 @@ int SQLite::_create_table(const tll::scheme::Message * msg)
 	if (sqlite3_step(sql.get()) != SQLITE_DONE)
 		return _log.fail(EINVAL, "Failed to create table '{}'", table);
 
-	if (_seq_index != Index::No) {
-		if (_create_index(table, "_tll_seq", _seq_index == Index::Unique))
-			return _log.fail(EINVAL, "Failed to create seq index for table {}", table);
-	}
-	auto key = tll::getter::get(msg->options, "key");
-	if (key) {
-		if (_create_index(table, *key, false))
-			return _log.fail(EINVAL, "Failed to create index {} for table {}", *key, table);
-	}
-
-	key = tll::getter::get(msg->options, "unique-key");
-	if (key) {
-		if (_create_index(table, *key, true))
-			return _log.fail(EINVAL, "Failed to create unique index {} for table {}", *key, table);
+	{
+		auto index = tll::getter::getT(msg->options, "sql.index", _seq_index, {{"no", Index::No}, {"yes", Index::Yes}, {"unique", Index::Unique}});
+		if (!index) {
+			_log.warning("Invalid sql.index option for {}: {}", msg->name, index.error());
+		} else if (*index != Index::No) {
+			if (_create_index(table, "_tll_seq", *index == Index::Unique))
+				return _log.fail(EINVAL, "Failed to create seq index for table {}", table);
+		}
 	}
 
+	for (auto & f : tll::util::list_wrap(msg->fields)) {
+		auto index = tll::getter::getT(f.options, "sql.index", Index::No, {{"no", Index::No}, {"yes", Index::Yes}, {"unique", Index::Unique}});
+		if (!index) {
+			_log.warning("Invalid sql.index option for {}.{}: {}", msg->name, f.name, index.error());
+		} else if (*index != Index::No) {
+			if (_create_index(table, f.name, *index == Index::Unique))
+				return _log.fail(EINVAL, "Failed to create index {} for table {}", f.name, table);
+		}
+	}
+
+	return 0;
+}
+
+int SQLite::_create_statement(std::string_view table, const tll::scheme::Message *msg)
+{
 	std::list<std::string> names;
 	names.push_back("`_tll_seq`");
 	for (auto & f : tll::util::list_wrap(msg->fields))
@@ -303,6 +317,8 @@ int SQLite::_create_table(const tll::scheme::Message * msg)
 	for (auto & i : names)
 		i = "?";
 	insert += fmt::format("({})", join(names.begin(), names.end()));
+
+	query_ptr_t sql = { nullptr, sqlite3_finalize };
 
 	sql.reset(_prepare(insert));
 	if (!sql)

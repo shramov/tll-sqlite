@@ -15,10 +15,9 @@ SCHEME = '''yamls://
     - {name: s0, type: '**int8'}
 - name: scalar
   id: 10
-  options.key: i8
   fields:
-    - {name: i8, type: int8}
-    - {name: i16, type: int16}
+    - {name: i8, type: int8, options.sql.index: unique}
+    - {name: i16, type: int16, options.sql.index: yes}
     - {name: i32, type: int32}
     - {name: i64, type: int64}
     - {name: u8, type: uint8}
@@ -30,7 +29,7 @@ SCHEME = '''yamls://
   fields:
     - {name: b, type: byte8}
     - {name: f, type: byte32, options.type: string}
-    - {name: s, type: string, options.primary-key: true}
+    - {name: s, type: string, options.sql.primary-key: true}
 '''
 
 @pytest.fixture
@@ -50,6 +49,7 @@ def test_insert_unique(context, db_file):
 
     c.post(name='scalar', data={'i8':-8, 'i16':-16, 'i32':-32, 'i64':-64, 'u8':8, 'u16':16, 'u32':32, 'd':1.23}, seq=1)
     with pytest.raises(TLLError): c.post(name='scalar', data={}, seq=1)
+    with pytest.raises(TLLError): c.post(name='scalar', data={'i8':-8}, seq=2)
 
     assert list(db.cursor().execute('SELECT * FROM `scalar`')) == [(1, -8, -16, -32, -64, 8, 16, 32, 1.23)]
 
@@ -134,3 +134,20 @@ def test_bulk(context, db_file):
     c.close()
 
     assert list(db.cursor().execute('SELECT * FROM `msg`')) == [(i, i) for i in range(15)]
+
+REMAP = '''yamls://
+- name: msg
+  options.sql.table: table
+  id: 10
+  fields:
+    - {name: field, type: int32}
+'''
+
+def test_remap(context, db_file):
+    db = sqlite3.connect(db_file)
+    c = context.Channel(f'sqlite://{db_file};replace=false', scheme=REMAP, dump='scheme')
+    c.open()
+
+    c.post(name='msg', data={}, seq=100)
+
+    assert list(db.cursor().execute('SELECT * FROM `table`')) == [(100, 0)]
