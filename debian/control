@@ -1,0 +1,17 @@
+Source: tll-sqlite
+Section: devel
+Priority: optional
+Maintainer: Pavel Shramov <shramov@mexmat.net>
+Build-Depends: debhelper (>=11), meson (>= 0.49), cmake, pkg-config,
+    libsqlite3-dev, libfmt-dev, libtll-dev,
+    python3-distutils, python3-pytest, python3-tll
+Standards-Version: 4.5.0
+Vcs-Git: https://github.com/shramov/tll-sqlite
+
+Package: libtll-sqlite
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Multi-Arch: same
+Description: SQLite channel for TLL
+ Package containes write-only channel for sqlite database
