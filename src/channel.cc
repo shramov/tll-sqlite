@@ -41,6 +41,7 @@ class SQLite : public tll::channel::Base<SQLite>
 
 	bool _replace = false;
 	enum class Index { No, Yes, Unique } _seq_index = Index::Unique;
+	enum class Journal { Default, Wal } _journal = Journal::Wal;
 
 	size_t _bulk_size = 0;
 	size_t _bulk_counter = 0;
@@ -89,6 +90,7 @@ int SQLite::_init(const Channel::Url &url, Channel * master)
 
 	_replace = reader.getT("replace", false);
 	_seq_index = reader.getT("seq-index", Index::Unique, {{"no", Index::No}, {"yes", Index::Yes}, {"unique", Index::Unique}});
+	_journal = reader.getT("journal", Journal::Wal, {{"wal", Journal::Wal}, {"default", Journal::Default}});
 	_bulk_size = reader.getT("bulk-size", 0u);
 	if (!reader)
 		return _log.fail(EINVAL, "Invalid url: {}", reader.error());
@@ -107,8 +109,10 @@ int SQLite::_open(const PropsView &s)
 		return _log.fail(EINVAL, "Failed to open '{}': {}", _path, sqlite3_errstr(r));
 	_db.reset(new sqliteptr(db));
 
-	if (sqlite3_exec(*_db, "PRAGMA journal_mode=wal", 0, 0, 0))
-		return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(*_db));
+	if (_journal == Journal::Wal) {
+		if (sqlite3_exec(*_db, "PRAGMA journal_mode=wal", 0, 0, 0))
+			return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(*_db));
+	}
 
 	for (auto & m : tll::util::list_wrap(_scheme->messages)) {
 		if (m.msgid == 0) {
