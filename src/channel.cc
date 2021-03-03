@@ -17,24 +17,14 @@
 
 using namespace tll;
 
-struct sqliteptr
-{
-	sqlite3 * _db = nullptr;
-	sqliteptr(sqlite3 * db) : _db(db) {}
-	~sqliteptr() { if (_db) sqlite3_close(_db); }
+struct sqlite3_delete { void operator ()(sqlite3 *ptr) const { sqlite3_close(ptr); } };
+struct sqlite3_stmt_delete { void operator ()(sqlite3_stmt *ptr) const { sqlite3_finalize(ptr); } };
 
-	sqlite3 * operator -> () { return _db; }
-	const sqlite3 * operator -> () const { return _db; }
-
-	operator sqlite3 * () { return _db; }
-	operator const sqlite3 * () const { return _db; }
-};
-
-using query_ptr_t = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
+using query_ptr_t = std::unique_ptr<sqlite3_stmt, sqlite3_stmt_delete>;
 
 class SQLite : public tll::channel::Base<SQLite>
 {
-	std::shared_ptr<sqliteptr> _db;
+	std::shared_ptr<sqlite3> _db = { nullptr, sqlite3_close };
 	std::map<int, std::pair<const tll::scheme::Message *, query_ptr_t>> _messages;
 
 	std::string _path;
@@ -67,9 +57,9 @@ class SQLite : public tll::channel::Base<SQLite>
 		_log.debug("Prepare SQL statement:\n\t{}", query);
 		sqlite3_stmt * sql = nullptr;
 		const char * tail = nullptr;
-		auto r = sqlite3_prepare_v2(*_db, query.data(), query.size(), &sql, &tail);
+		auto r = sqlite3_prepare_v2(_db.get(), query.data(), query.size(), &sql, &tail);
 		if (r != SQLITE_OK)
-			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(*_db), query);
+			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(_db.get()), query);
 		return sql;
 	}
 };
@@ -107,11 +97,11 @@ int SQLite::_open(const PropsView &s)
 	auto r = sqlite3_open_v2(_path.c_str(), &db, flags, nullptr);
 	if (r)
 		return _log.fail(EINVAL, "Failed to open '{}': {}", _path, sqlite3_errstr(r));
-	_db.reset(new sqliteptr(db));
+	_db.reset(db, sqlite3_close);
 
 	if (_journal == Journal::Wal) {
-		if (sqlite3_exec(*_db, "PRAGMA journal_mode=wal", 0, 0, 0))
-			return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(*_db));
+		if (sqlite3_exec(_db.get(), "PRAGMA journal_mode=wal", 0, 0, 0))
+			return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(_db.get()));
 	}
 
 	for (auto & m : tll::util::list_wrap(_scheme->messages)) {
@@ -241,7 +231,7 @@ int sql_bind(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, const
 
 int SQLite::_create_table(std::string_view table, const tll::scheme::Message * msg)
 {
-	query_ptr_t sql = { nullptr, sqlite3_finalize };
+	query_ptr_t sql;
 
 	sql.reset(_prepare("SELECT name FROM sqlite_master WHERE name=?"));
 	if (!sql)
@@ -322,7 +312,7 @@ int SQLite::_create_statement(std::string_view table, const tll::scheme::Message
 		i = "?";
 	insert += fmt::format("({})", join(names.begin(), names.end()));
 
-	query_ptr_t sql = { nullptr, sqlite3_finalize };
+	query_ptr_t sql;
 
 	sql.reset(_prepare(insert));
 	if (!sql)
@@ -336,7 +326,7 @@ int SQLite::_create_statement(std::string_view table, const tll::scheme::Message
 int SQLite::_create_index(const std::string_view &name, std::string_view key, bool unique)
 {
 	_log.debug("Create index for {}: key {}", name, key);
-	query_ptr_t sql = { nullptr, sqlite3_finalize };
+	query_ptr_t sql;
 
 	std::string_view ustr = unique ? "UNIQUE " : "";
 	auto str = fmt::format("CREATE {} INDEX `_tll_{}_{}` on `{}`(`{}`)", ustr, name, key, name, key);
@@ -352,8 +342,8 @@ int SQLite::_create_index(const std::string_view &name, std::string_view key, bo
 int SQLite::_close()
 {
 	if (_bulk_counter) {
-		if (sqlite3_exec(*_db, "COMMIT", 0, 0, 0))
-			_log.error("Failed to commit pending transaction: {}", sqlite3_errmsg(*_db));
+		if (sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0))
+			_log.error("Failed to commit pending transaction: {}", sqlite3_errmsg(_db.get()));
 		_bulk_counter = 0;
 	}
 	_messages.clear();
@@ -373,7 +363,7 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 	auto & [message, insert] = it->second;
 
 	if (!_bulk_counter) {
-		sqlite3_exec(*_db, "BEGIN", 0, 0, 0);
+		sqlite3_exec(_db.get(), "BEGIN", 0, 0, 0);
 	}
 
 	sqlite3_reset(insert.get());
@@ -388,11 +378,11 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 	}
 	auto r = sqlite3_step(insert.get());
 	if (r != SQLITE_DONE)
-		return _log.fail(EINVAL, "Failed to insert data: {}", sqlite3_errmsg(*_db));
+		return _log.fail(EINVAL, "Failed to insert data: {}", sqlite3_errmsg(_db.get()));
 	if (++_bulk_counter >= _bulk_size) {
 		_log.debug("Commit");
-		if (sqlite3_exec(*_db, "COMMIT", 0, 0, 0))
-			_log.error("Commit failed: {}", sqlite3_errmsg(*_db));
+		if (sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0))
+			_log.error("Commit failed: {}", sqlite3_errmsg(_db.get()));
 		_bulk_counter = 0;
 	}
 	return 0;
