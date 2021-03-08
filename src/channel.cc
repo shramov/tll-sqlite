@@ -37,7 +37,7 @@ class SQLite : public tll::channel::Base<SQLite>
 	size_t _bulk_counter = 0;
 
  public:
-	static constexpr std::string_view param_prefix() { return "sqlite"; }
+	static constexpr std::string_view channel_protocol() { return "sqlite"; }
 	static constexpr auto process_policy() { return ProcessPolicy::Never; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
