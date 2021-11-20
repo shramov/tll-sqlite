@@ -177,6 +177,8 @@ tll::result_t<std::string> sql_type(const tll::scheme::Field *field)
 			return "VARCHAR";
 		}
 		return tll::error("Nested arrays not supported");
+	case Field::Union:
+		return tll::error("Union not supported");
 	}
 	return tll::error("Invalid field type");
 }
@@ -222,6 +224,8 @@ int sql_bind(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, const
 				return sqlite3_bind_text(sql, idx, "", 0, SQLITE_STATIC);
 			return sqlite3_bind_text(sql, idx, data.view(ptr->offset).template dataT<char>(), ptr->size - 1, SQLITE_STATIC);
 		}
+		return SQLITE_ERROR;
+	case Field::Union:
 		return SQLITE_ERROR;
 	}
 	return SQLITE_ERROR;
