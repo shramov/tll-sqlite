@@ -390,4 +390,4 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 
 TLL_DEFINE_IMPL(SQLite);
 
-auto channel_module = tll::make_channel_module<SQLite>();
+TLL_DEFINE_MODULE(SQLite);
