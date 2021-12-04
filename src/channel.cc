@@ -41,7 +41,7 @@ class SQLite : public tll::channel::Base<SQLite>
 	static constexpr auto process_policy() { return ProcessPolicy::Never; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
-	int _open(const tll::PropsView &);
+	int _open(const tll::ConstConfig &);
 	int _close();
 	void _destroy();
 
@@ -88,7 +88,7 @@ int SQLite::_init(const Channel::Url &url, Channel * master)
 	return 0;
 }
 
-int SQLite::_open(const PropsView &s)
+int SQLite::_open(const ConstConfig &)
 {
 	_bulk_counter = 0;
 
