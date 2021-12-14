@@ -10,6 +10,7 @@
 #include <variant>
 
 #include "tll/channel/base.h"
+#include "tll/channel/module.h"
 #include "tll/scheme/util.h"
 #include "tll/util/listiter.h"
 #include "tll/util/memoryview.h"
