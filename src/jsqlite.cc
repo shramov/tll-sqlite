@@ -15,30 +15,17 @@
 #include <tll/util/refptr.h>
 #include <tll/util/string.h>
 
+#include "common.h"
+
 using namespace tll;
-
-struct sqliteptr
-{
-	sqlite3 * _db = nullptr;
-	sqliteptr(sqlite3 * db) : _db(db) {}
-	~sqliteptr() { if (_db) sqlite3_close(_db); }
-
-	sqlite3 * operator -> () { return _db; }
-	const sqlite3 * operator -> () const { return _db; }
-
-	operator sqlite3 * () { return _db; }
-	operator const sqlite3 * () const { return _db; }
-};
-
-using query_ptr_t = std::unique_ptr<sqlite3_stmt, decltype(&sqlite3_finalize)>;
 
 class JSQLite : public tll::channel::Base<JSQLite>
 {
  	tll::json::JSON _json = { _log };
 
-	std::shared_ptr<sqliteptr> _db;
-	query_ptr_t _select = { nullptr, sqlite3_finalize };
-	query_ptr_t _insert = { nullptr, sqlite3_finalize };
+	std::shared_ptr<sqlite3> _db = { nullptr, sqlite3_close };
+	query_ptr_t _select;
+	query_ptr_t _insert;
 
 	JSQLite * master = nullptr;
 	std::string _path;
@@ -72,9 +59,9 @@ class JSQLite : public tll::channel::Base<JSQLite>
 		_log.debug("Prepare SQL statement:\n\t{}", query);
 		sqlite3_stmt * sql = nullptr;
 		const char * tail = nullptr;
-		auto r = sqlite3_prepare_v2(*_db, query.data(), query.size(), &sql, &tail);
+		auto r = sqlite3_prepare_v2(_db.get(), query.data(), query.size(), &sql, &tail);
 		if (r != SQLITE_OK)
-			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(*_db), query);
+			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(_db.get()), query);
 		return sql;
 	}
 };
@@ -101,7 +88,7 @@ int JSQLite::_init(const Channel::Url &url, Channel * master)
 	//	return _log.fail(EINVAL, "Failed to init JSON encoder");
 
 	_table = reader.getT<std::string>("table");
-	_bulk_size = reader.getT("bulk", _bulk_size);
+	_bulk_size = reader.getT("bulk-size", _bulk_size);
 	if ((internal.caps & (caps::Input | caps::Output)) == caps::Input)
 		_autoclose = reader.getT("autoclose", false);
 	if (!reader)
@@ -133,7 +120,7 @@ int JSQLite::_open(const ConstConfig &s)
 	auto r = sqlite3_open_v2(_path.c_str(), &db, flags, nullptr);
 	if (r)
 		return _log.fail(EINVAL, "Failed to open '{}': {}", _path, sqlite3_errstr(r));
-	_db.reset(new sqliteptr(db));
+	_db.reset(db, sqlite3_close);
 
 	if (internal.caps & caps::Output) {
 		if (_create_table())
@@ -233,7 +220,7 @@ int JSQLite::_open(const ConstConfig &s)
 
 int JSQLite::_create_table()
 {
-	query_ptr_t sql = { nullptr, sqlite3_finalize };
+	query_ptr_t sql;
 
 	sql.reset(_prepare("SELECT name FROM sqlite_master WHERE name=?"));
 	if (!sql)
@@ -267,7 +254,7 @@ int JSQLite::_create_table()
 int JSQLite::_create_index(const std::string_view &name, const std::string_view &key)
 {
 	_log.debug("Create index for {}: key {}", name, key);
-	query_ptr_t sql = { nullptr, sqlite3_finalize };
+	query_ptr_t sql;
 
 	auto str = fmt::format("CREATE UNIQUE INDEX `json_{}_{}` on `{}`(json_extract(data, \"$.{}\")) WHERE `name`='{}'", _table, name, _table, key, name);
 	sql.reset(_prepare(str));
@@ -282,7 +269,7 @@ int JSQLite::_create_index(const std::string_view &name, const std::string_view 
 int JSQLite::_close()
 {
 	if (_bulk_counter) {
-		sqlite3_exec(*_db, "COMMIT", 0, 0, 0);
+		sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0);
 		_bulk_counter = 0;
 	}
 	_select.reset();
@@ -309,7 +296,7 @@ int JSQLite::_post(const tll_msg_t *msg, int flags)
 	}
 	
 	if (!_bulk_counter) {
-		sqlite3_exec(*_db, "BEGIN", 0, 0, 0);
+		sqlite3_exec(_db.get(), "BEGIN", 0, 0, 0);
 	}
 	sqlite3_reset(_insert.get());
 	sqlite3_bind_int64(_insert.get(), 1, (sqlite3_int64) msg->seq);
@@ -319,7 +306,7 @@ int JSQLite::_post(const tll_msg_t *msg, int flags)
 	if (r != SQLITE_DONE)
 		return _log.fail(EINVAL, "Failed to insert data");
 	if (++_bulk_counter >= _bulk_size) {
-		sqlite3_exec(*_db, "COMMIT", 0, 0, 0);
+		sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0);
 		_bulk_counter = 0;
 	}
 	return 0;
