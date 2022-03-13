@@ -17,6 +17,7 @@
 #include "tll/util/string.h"
 
 #include "common.h"
+#include "sqlite-scheme.h"
 
 using namespace tll;
 
@@ -34,9 +35,12 @@ class SQLite : public tll::channel::Base<SQLite>
 	size_t _bulk_size = 0;
 	size_t _bulk_counter = 0;
 
+	query_ptr_t _select_statement = nullptr;
+	const tll::scheme::Message * _select_message = nullptr;
+
  public:
 	static constexpr std::string_view channel_protocol() { return "sqlite"; }
-	static constexpr auto process_policy() { return ProcessPolicy::Never; }
+	static constexpr auto process_policy() { return ProcessPolicy::Custom; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
 	int _open(const tll::ConstConfig &);
@@ -44,11 +48,13 @@ class SQLite : public tll::channel::Base<SQLite>
 	void _destroy();
 
 	int _post(const tll_msg_t *msg, int flags);
+	int _process(long timeout, int flags);
 
  private:
 	int _create_table(std::string_view table, const tll::scheme::Message *);
 	int _create_statement(std::string_view table, const tll::scheme::Message *);
 	int _create_index(const std::string_view &name, std::string_view key, bool unique);
+	int _create_select_statement(std::string_view _table);
 
 	sqlite3_stmt * _prepare(const std::string_view query)
 	{
@@ -64,6 +70,10 @@ class SQLite : public tll::channel::Base<SQLite>
 
 int SQLite::_init(const Channel::Url &url, Channel * master)
 {
+	_scheme_control.reset(context().scheme_load(sqlite_scheme::scheme));
+	if (!_scheme_control.get())
+		return _log.fail(EINVAL, "Failed to load control scheme");
+
 	if ((internal.caps & (caps::Input | caps::Output)) == caps::Input)
 		return _log.fail(EINVAL, "SQLite channel is write-only");
 
@@ -86,9 +96,11 @@ int SQLite::_init(const Channel::Url &url, Channel * master)
 	return 0;
 }
 
-int SQLite::_open(const ConstConfig &)
+int SQLite::_open(const ConstConfig &s)
 {
 	_bulk_counter = 0;
+
+	auto table_name = s.get("table");
 
 	sqlite3 * db = nullptr;
 	int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
@@ -114,6 +126,21 @@ int SQLite::_open(const ConstConfig &)
 			return _log.fail(EINVAL, "Failed to create table '{}' for '{}'", table, m.name);
 		if (_create_statement(table, &m))
 			return _log.fail(EINVAL, "Failed to prepare SQL statement for '{}'", m.name);
+	}
+
+	if (table_name && table_name->size()) {
+		std::string_view tname = *table_name;
+		for (auto& m : _messages) {
+			const auto& options = m.second.first->options;
+			const auto& name = m.second.first->name;
+			if (tname == tll::getter::get(options, "sql.table").value_or(std::string_view(name))) {
+				_select_message = m.second.first;
+			}
+		}
+		if (_create_select_statement(tname)) {
+			return EINVAL;
+		}
+		_update_dcaps(dcaps::Process | dcaps::Pending);
 	}
 
 	return 0;
@@ -229,6 +256,69 @@ int sql_bind(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, const
 	return SQLITE_ERROR;
 }
 
+template <typename Buf>
+int sql_column_(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, Buf data)
+{
+	using tll::scheme::Field;
+	switch (field->type) {
+	case Field::Int8:
+		*data.template dataT<int8_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::Int16:
+		*data.template dataT<int16_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::Int32:
+		*data.template dataT<int32_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::Int64:
+		*data.template dataT<int64_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::UInt8:
+		*data.template dataT<uint8_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::UInt16:
+		*data.template dataT<uint16_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::UInt32:
+		*data.template dataT<uint32_t>() = sqlite3_column_int64(sql, idx);
+		return 0;
+	case Field::Double:
+		*data.template dataT<double>() = sqlite3_column_double(sql, idx);
+		return 0;
+	case Field::Decimal128:
+		return SQLITE_ERROR;
+
+	case Field::Bytes: {
+		if (field->sub_type == Field::ByteString) {
+			auto string = (const char*) sqlite3_column_text(sql, idx);
+			memcpy(data.template dataT<char>(), string, std::min(strlen(string), field->size));
+			return 0;
+		}
+		auto b_string = (sqlite3_column_blob(sql, idx));
+		memcpy(data.data(), b_string, field->size);
+		return 0;
+	}
+	case Field::Pointer: {
+		if (field->type_ptr->type == Field::Int8 && field->sub_type == Field::ByteString) {
+			auto string = std::string_view((const char*) sqlite3_column_text(sql, idx));
+			tll::scheme::generic_offset_ptr_t ptr;
+			ptr.size = string.size() + 1;
+			ptr.offset = data.size();
+			ptr.entity = 1;
+			data.resize(data.size() + string.size() + 1);
+			write_pointer(field, data, ptr);
+			memcpy(data.view(ptr.offset).template dataT<char>(), string.data(), string.size() + 1);
+			return 0;
+		}
+		return SQLITE_ERROR;
+	}
+	default:
+		return SQLITE_ERROR;
+	}
+
+	return SQLITE_ERROR;
+}
+
 }
 
 int SQLite::_create_table(std::string_view table, const tll::scheme::Message * msg)
@@ -299,6 +389,20 @@ int SQLite::_create_table(std::string_view table, const tll::scheme::Message * m
 	return 0;
 }
 
+int SQLite::_create_select_statement(std::string_view table) {
+	std::list<std::string> names;
+	names.push_back("`_tll_seq`");
+	for (auto & f : tll::util::list_wrap(_select_message->fields)) {
+		names.push_back(fmt::format("`{}`", f.name));
+	}
+	std::string select = fmt::format("SELECT {} FROM `{}`", join(names.begin(), names.end()), table);
+	_select_statement.reset(_prepare(select));
+	if (!_select_statement) {
+		return _log.fail(EINVAL, "Failed to prepare select statement for table {}: {}", table, select);
+	}
+	return 0;
+}
+
 int SQLite::_create_statement(std::string_view table, const tll::scheme::Message *msg)
 {
 	std::list<std::string> names;
@@ -355,8 +459,21 @@ int SQLite::_close()
 
 int SQLite::_post(const tll_msg_t *msg, int flags)
 {
-	if (msg->type != TLL_MESSAGE_DATA)
+	if (msg->type != TLL_MESSAGE_DATA && msg->type != TLL_MESSAGE_CONTROL)
 		return 0;
+
+	if (msg->type == TLL_MESSAGE_CONTROL) {
+		if (msg->msgid == sqlite_scheme::table_name::id) {
+			_select_message = _messages.at(((sqlite_scheme::table_name*) msg->data)->msgid).first;
+			if (_create_select_statement(std::string_view(_select_message->name))) {
+				return EINVAL;
+			}
+			_update_dcaps(dcaps::Process | dcaps::Pending);
+			return 0;
+		}
+		return EINVAL;
+	}
+
 	if (msg->msgid == 0)
 		return _log.fail(EINVAL, "Unable to insert message without msgid");
 	auto it = _messages.find(msg->msgid);
@@ -387,6 +504,36 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 			_log.error("Commit failed: {}", sqlite3_errmsg(_db.get()));
 		_bulk_counter = 0;
 	}
+	return 0;
+}
+
+int SQLite::_process(long timeout, int flags) {
+	int result = sqlite3_step(_select_statement.get()); // 100 AS SQLITE_ROW, 101 AS SQLITE_DONE
+
+	if (result == SQLITE_ROW) {
+		tll_msg_t msg = {TLL_MESSAGE_DATA, _select_message->msgid,
+			sqlite3_column_int64(_select_statement.get(), 0)};
+		std::vector<unsigned char> buf;
+		buf.resize(_select_message->size);
+		auto view = tll::make_view(buf);
+		int idx = 1;
+		for (auto & f : tll::util::list_wrap(_select_message->fields)) {
+			if (sql_column_(_select_statement.get(), idx++, &f, view.view(f.offset))) {
+				return EINVAL;
+			}
+		}
+		msg.size = buf.size();
+		msg.data = buf.data();
+		_callback_data(&msg);
+		return 0;
+	} else if (result == SQLITE_DONE) {
+		_update_dcaps(0, dcaps::Process | dcaps::Pending);
+		tll_msg_t msg = {TLL_MESSAGE_CONTROL, sqlite_scheme::data_end::id};
+		_callback(&msg);
+		SQLite::_close();
+		return 0;
+	}
+	_log.debug("nouret: {}\t", sqlite3_column_int(_select_statement.get(), 0));
 	return 0;
 }
 

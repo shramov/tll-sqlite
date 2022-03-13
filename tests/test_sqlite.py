@@ -8,6 +8,11 @@ import pytest
 
 from tll.channel import Context
 from tll.error import TLLError
+from tll.test_util import Accum
+
+#import tll.logger
+
+#tll.logger.init()
 
 SCHEME = '''yamls://
 - name: ignored
@@ -30,6 +35,14 @@ SCHEME = '''yamls://
     - {name: b, type: byte8}
     - {name: f, type: byte32, options.type: string}
     - {name: s, type: string, options.sql.primary-key: true}
+- name: ptr_text
+  id: 30
+  fields:
+    - {name: b, type: string}
+    - {name: f, type: byte8}
+    - {name: s, type: string, options.sql.primary-key: true}
+    - {name: r, type: byte32, options.type: string}
+    - {name: t, type: string}
 '''
 
 @pytest.fixture
@@ -151,3 +164,86 @@ def test_remap(context, db_file):
     c.post(name='msg', data={}, seq=100)
 
     assert list(db.cursor().execute('SELECT * FROM `table`')) == [(100, 0)]
+
+def test_query(context, db_file):
+    db = sqlite3.connect(db_file)
+    c = Accum(f'sqlite://{db_file};replace=false', scheme=BULK, dump='scheme', context=context)
+    c.open()
+
+    for i in range(5):
+        c.post(name='msg', data={'field': i + 1}, seq=i)
+
+    c.close()
+    c.open(table='msg')
+
+    for i in range(5):
+        c.process()
+        assert [(x.msgid, x.seq, c.unpack(x).as_dict()) for x in c.result] ==\
+            [(10, j, {"field": j + 1}) for j in range(i + 1)]
+
+def test_query_text(context, db_file):
+    db = sqlite3.connect(db_file)
+    c = Accum(f'sqlite://{db_file};replace=false', scheme=SCHEME, dump='scheme', context=context)
+    c.open()
+
+    for i in range(5):
+        c.post(name='ptr_text', data={'b': f'b{i}', 'f': f'f{i}'.encode('ascii'), 's': f's{i}',
+                                  'r': f'rrr{i}', 't': 't' * i}, seq=i)
+
+    c.close()
+    c.open(table='ptr_text')
+
+    for i in range(5):
+        c.process()
+        assert [(x.msgid, x.seq) for x in c.result] == [(30, j) for j in range(i + 1)]
+        data = c.unpack(c.result[i]).as_dict()
+        assert data['b'] == f'b{i}'
+        assert data['f'] == bytearray((f'f{i}' + '\0' * (7 - len(str(i)))).encode('ascii'))
+        assert data['s'] == f's{i}'
+        assert data['r'] == f'rrr{i}'
+        assert data['t'] == 't' * i
+
+    c.process()
+
+    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].type == c.result[-1].Type.Control
+
+    c.close()
+
+def test_control_message(context, db_file):
+    db = sqlite3.connect(db_file)
+    c = Accum(f'sqlite://{db_file};replace=false', scheme=SCHEME, dump='scheme', context=context)
+    c.open()
+
+    for i in range(5):
+        c.post(name='scalar', data={'i8':i, 'i16':-17, 'i32':-33, 'i64':-65, 'u8':9,
+                                    'u16':17, 'u32':33, 'd':2.34}, seq=i)
+        c.post(name='text', data={'b':b'bytes', 'f':'fixed string', 's':f'offset string {i}'}, seq=i)
+
+    c.close()
+    c.open(table='scalar')
+
+    for i in range(5):
+        c.process()
+    c.process()
+    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].type == c.result[-1].Type.Control
+
+    c.close()
+    c.open(table='text')
+    for i in range(5):
+        c.process()
+    c.process()
+    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].type == c.result[-1].Type.Control
+
+    assert len(c.result) == 12
+    c.close()
+    c.open()
+    c.post(type=c.Type.Control, data=c.scheme_control['table_name'].object(msgid=10))
+    for i in range(5):
+        c.process()
+    c.process()
+    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].type == c.result[-1].Type.Control
+    assert len(c.result) == 18
