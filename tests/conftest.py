@@ -6,6 +6,9 @@ import pytest
 import pathlib
 import tempfile
 
+import tll.logger
+tll.logger.init()
+
 version = tuple([int(x) for x in pytest.__version__.split('.')[:2]])
 
 if version < (3, 9):
