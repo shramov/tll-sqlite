@@ -13,6 +13,13 @@ lib = shared_library('tll-sqlite',
 	install : true,
 )
 
+lib = shared_library('tll-jsqlite',
+	['src/jsqlite.cc'],
+	include_directories : include,
+	dependencies : [fmt, sqlite, tll],
+	install : true,
+)
+
 test('pytest', import('python').find_installation('python3')
 	, args: ['-m', 'pytest', '-v', '--log-level=DEBUG', 'tests/']
 	, env: 'BUILD_DIR=@0@'.format(meson.current_build_dir())
