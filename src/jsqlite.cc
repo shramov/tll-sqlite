@@ -19,11 +19,10 @@
 
 using namespace tll;
 
-class JSQLite : public tll::channel::Base<JSQLite>
+class JSQLite : public SQLBase<JSQLite>
 {
  	tll::json::JSON _json = { _log };
 
-	std::shared_ptr<sqlite3> _db = { nullptr, sqlite3_close };
 	query_ptr_t _select;
 	query_ptr_t _insert;
 
@@ -33,13 +32,17 @@ class JSQLite : public tll::channel::Base<JSQLite>
 	std::vector<std::variant<std::string, long long, double>> _query;
 	bool _autoclose;
 
-	bool _transaction = false;
-	size_t _bulk_size = 10000;
-	size_t _bulk_counter = 0;
-
 	tll::json::JSON * json() { if (master) return &master->_json; return &_json; }
 
  public:
+	static constexpr std::string_view sqlite_control_scheme()
+	{
+		return R"(yamls://
+- name: EOD
+  id: 1
+)";
+	}
+
 	static constexpr std::string_view channel_protocol() { return "jsqlite"; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
@@ -53,17 +56,6 @@ class JSQLite : public tll::channel::Base<JSQLite>
  private:
 	int _create_table();
 	int _create_index(const std::string_view &name, const std::string_view &key);
-
-	sqlite3_stmt * _prepare(const std::string_view query)
-	{
-		_log.debug("Prepare SQL statement:\n\t{}", query);
-		sqlite3_stmt * sql = nullptr;
-		const char * tail = nullptr;
-		auto r = sqlite3_prepare_v2(_db.get(), query.data(), query.size(), &sql, &tail);
-		if (r != SQLITE_OK)
-			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(_db.get()), query);
-		return sql;
-	}
 };
 
 int JSQLite::_init(const Channel::Url &url, Channel * master)
@@ -76,31 +68,20 @@ int JSQLite::_init(const Channel::Url &url, Channel * master)
 		return 0;
 	}
 
-	if (!_scheme_url)
-		return _log.fail(EINVAL, "Channel needs scheme");
-
-	if (!url.host().size())
-		return _log.fail(EINVAL, "No path to database");
-	_path = url.host();
-
 	auto reader = channel_props_reader(url);
 	//if (_json.init(reader))
 	//	return _log.fail(EINVAL, "Failed to init JSON encoder");
-
 	_table = reader.getT<std::string>("table");
-	_bulk_size = reader.getT("bulk-size", _bulk_size);
 	if ((internal.caps & (caps::Input | caps::Output)) == caps::Input)
 		_autoclose = reader.getT("autoclose", false);
 	if (!reader)
 		return _log.fail(EINVAL, "Invalid url: {}", reader.error());
 
-	return 0;
+	return SQLBase<JSQLite>::_init(url, master);
 }
 
 int JSQLite::_open(const ConstConfig &s)
 {
-	_bulk_counter = 0;
-
 	if (master) {
 		_db = master->_db;
 		auto s = master->self()->scheme();
@@ -110,17 +91,11 @@ int JSQLite::_open(const ConstConfig &s)
 		return 0;
 	}
 
+	if (auto r = SQLBase<JSQLite>::_open(s); r)
+		return _log.fail(r, "Failed to open SQLite database");
+
 	if (_json.init_scheme(_scheme.get()))
 		return _log.fail(EINVAL, "Failed to initialize scheme");
-
-	sqlite3 * db = nullptr;
-	int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-	if ((internal.caps & TLL_CAPS_INOUT) == TLL_CAPS_INPUT)
-		flags = SQLITE_OPEN_READONLY;
-	auto r = sqlite3_open_v2(_path.c_str(), &db, flags, nullptr);
-	if (r)
-		return _log.fail(EINVAL, "Failed to open '{}': {}", _path, sqlite3_errstr(r));
-	_db.reset(db, sqlite3_close);
 
 	if (internal.caps & caps::Output) {
 		if (_create_table())
@@ -212,7 +187,7 @@ int JSQLite::_open(const ConstConfig &s)
 			else if (std::holds_alternative<double>(v))
 				sqlite3_bind_double(_select.get(), 1 + i, std::get<double>(v));
 		}
-		_update_dcaps(dcaps::Pending);
+		_update_dcaps(dcaps::Process | dcaps::Pending);
 	}
 
 	return 0;
@@ -268,14 +243,9 @@ int JSQLite::_create_index(const std::string_view &name, const std::string_view 
 
 int JSQLite::_close()
 {
-	if (_bulk_counter) {
-		sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0);
-		_bulk_counter = 0;
-	}
 	_select.reset();
 	_insert.reset();
-	_db.reset();
-	return 0;
+	return SQLBase<JSQLite>::_close();
 }
 
 int JSQLite::_post(const tll_msg_t *msg, int flags)
@@ -306,8 +276,7 @@ int JSQLite::_post(const tll_msg_t *msg, int flags)
 	if (r != SQLITE_DONE)
 		return _log.fail(EINVAL, "Failed to insert data");
 	if (++_bulk_counter >= _bulk_size) {
-		sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0);
-		_bulk_counter = 0;
+		_commit();
 	}
 	return 0;
 }

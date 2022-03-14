@@ -21,26 +21,19 @@
 
 using namespace tll;
 
-class SQLite : public tll::channel::Base<SQLite>
+class SQLite : public SQLBase<SQLite>
 {
-	std::shared_ptr<sqlite3> _db = { nullptr, sqlite3_close };
 	std::map<int, std::pair<const tll::scheme::Message *, query_ptr_t>> _messages;
 
-	std::string _path;
-
 	bool _replace = false;
-	enum class Index { No, Yes, Unique } _seq_index = Index::Unique;
-	enum class Journal { Default, Wal } _journal = Journal::Wal;
-
-	size_t _bulk_size = 0;
-	size_t _bulk_counter = 0;
 
 	query_ptr_t _select_statement = nullptr;
 	const tll::scheme::Message * _select_message = nullptr;
 
  public:
+	static constexpr std::string_view sqlite_control_scheme() { return sqlite_scheme::scheme; }
+
 	static constexpr std::string_view channel_protocol() { return "sqlite"; }
-	static constexpr auto process_policy() { return ProcessPolicy::Custom; }
 
 	int _init(const tll::Channel::Url &, tll::Channel *master);
 	int _open(const tll::ConstConfig &);
@@ -70,49 +63,24 @@ class SQLite : public tll::channel::Base<SQLite>
 
 int SQLite::_init(const Channel::Url &url, Channel * master)
 {
-	_scheme_control.reset(context().scheme_load(sqlite_scheme::scheme));
-	if (!_scheme_control.get())
-		return _log.fail(EINVAL, "Failed to load control scheme");
-
 	if ((internal.caps & (caps::Input | caps::Output)) == caps::Input)
 		return _log.fail(EINVAL, "SQLite channel is write-only");
-
-	if (!_scheme_url)
-		return _log.fail(EINVAL, "Channel needs scheme");
-
-	if (!url.host().size())
-		return _log.fail(EINVAL, "No path to database");
-	_path = url.host();
 
 	auto reader = channel_props_reader(url);
 
 	_replace = reader.getT("replace", false);
-	_seq_index = reader.getT("seq-index", Index::Unique, {{"no", Index::No}, {"yes", Index::Yes}, {"unique", Index::Unique}});
-	_journal = reader.getT("journal", Journal::Wal, {{"wal", Journal::Wal}, {"default", Journal::Default}});
-	_bulk_size = reader.getT("bulk-size", 0u);
 	if (!reader)
 		return _log.fail(EINVAL, "Invalid url: {}", reader.error());
 
-	return 0;
+	return SQLBase<SQLite>::_init(url, master);
 }
 
 int SQLite::_open(const ConstConfig &s)
 {
-	_bulk_counter = 0;
+	if (auto r = SQLBase<SQLite>::_open(s); r)
+		return _log.fail(r, "Failed to open SQLite database");
 
 	auto table_name = s.get("table");
-
-	sqlite3 * db = nullptr;
-	int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
-	auto r = sqlite3_open_v2(_path.c_str(), &db, flags, nullptr);
-	if (r)
-		return _log.fail(EINVAL, "Failed to open '{}': {}", _path, sqlite3_errstr(r));
-	_db.reset(db, sqlite3_close);
-
-	if (_journal == Journal::Wal) {
-		if (sqlite3_exec(_db.get(), "PRAGMA journal_mode=wal", 0, 0, 0))
-			return _log.fail(EINVAL, "Failed to change journal_mode to WAL: {}", sqlite3_errmsg(_db.get()));
-	}
 
 	for (auto & m : tll::util::list_wrap(_scheme->messages)) {
 		if (m.msgid == 0) {
@@ -447,14 +415,8 @@ int SQLite::_create_index(const std::string_view &name, std::string_view key, bo
 
 int SQLite::_close()
 {
-	if (_bulk_counter) {
-		if (sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0))
-			_log.error("Failed to commit pending transaction: {}", sqlite3_errmsg(_db.get()));
-		_bulk_counter = 0;
-	}
 	_messages.clear();
-	_db.reset();
-	return 0;
+	return SQLBase<SQLite>::_close();
 }
 
 int SQLite::_post(const tll_msg_t *msg, int flags)
@@ -499,10 +461,7 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 	if (r != SQLITE_DONE)
 		return _log.fail(EINVAL, "Failed to insert data: {}", sqlite3_errmsg(_db.get()));
 	if (++_bulk_counter >= _bulk_size) {
-		_log.debug("Commit");
-		if (sqlite3_exec(_db.get(), "COMMIT", 0, 0, 0))
-			_log.error("Commit failed: {}", sqlite3_errmsg(_db.get()));
-		_bulk_counter = 0;
+		_commit();
 	}
 	return 0;
 }
