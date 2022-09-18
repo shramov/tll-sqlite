@@ -148,6 +148,8 @@ tll::result_t<std::string> sql_type(const tll::scheme::Field *field)
 	case Field::UInt32:
 	case Field::Int64:
 		return "INTEGER";
+	case Field::UInt64:
+		return tll::error("UInt64 not supported");
 
 	case Field::Double:
 		return "REAL";
@@ -193,6 +195,7 @@ int sql_bind(sqlite3_stmt * sql, int idx, const tll::scheme::Field *field, const
 	case Field::Double:
 		return sqlite3_bind_double(sql, idx, *data.template dataT<double>());
 
+	case Field::UInt64:
 	case Field::Decimal128:
 		return SQLITE_ERROR;
 
