@@ -318,7 +318,7 @@ int JSQLite::_process(long timeout, int flags)
 	jmsg.size = size;
 	jmsg.data = sqlite3_column_blob(_select.get(), 2);
 
-	auto data = json()->decode(message, &jmsg, &jmsg);
+	auto data = json()->decode(message, jmsg, &jmsg);
 	if (!data)
 		return _log.fail(EINVAL, "Failed to decode JSON for message {} (seq {})", message->name, jmsg.seq);
 
