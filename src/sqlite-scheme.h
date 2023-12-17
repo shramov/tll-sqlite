@@ -8,20 +8,20 @@
 namespace sqlite_scheme {
 
 static constexpr std::string_view scheme = R"(yamls://
-- name: data_end
+- name: EndOfData
   id: 1
 
-- name: table_name
+- name: TableName
   id: 2
   fields:
     - {name: msgid, type: int64}
 )";
 
-struct data_end {
+struct EndOfData {
 	static constexpr int id = 1;
 };
 
-struct table_name {
+struct TableName {
 	static constexpr int id = 2;
 	int64_t msgid;
 };

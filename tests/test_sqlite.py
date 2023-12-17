@@ -205,7 +205,7 @@ def test_query_text(context, db_file):
 
     c.process()
 
-    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].msgid == c.scheme_control['EndOfData'].msgid
     assert c.result[-1].type == c.result[-1].Type.Control
 
     c.close()
@@ -226,7 +226,7 @@ def test_control_message(context, db_file):
     for i in range(5):
         c.process()
     c.process()
-    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].msgid == c.scheme_control['EndOfData'].msgid
     assert c.result[-1].type == c.result[-1].Type.Control
 
     c.close()
@@ -234,16 +234,16 @@ def test_control_message(context, db_file):
     for i in range(5):
         c.process()
     c.process()
-    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].msgid == c.scheme_control['EndOfData'].msgid
     assert c.result[-1].type == c.result[-1].Type.Control
 
     assert len(c.result) == 12
     c.close()
     c.open()
-    c.post(type=c.Type.Control, data=c.scheme_control['table_name'].object(msgid=10))
+    c.post({'msgid': 10}, name='TableName', type=c.Type.Control)
     for i in range(5):
         c.process()
     c.process()
-    assert c.result[-1].msgid == c.scheme_control['data_end'].msgid
+    assert c.result[-1].msgid == c.scheme_control['EndOfData'].msgid
     assert c.result[-1].type == c.result[-1].Type.Control
     assert len(c.result) == 18

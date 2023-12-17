@@ -428,8 +428,8 @@ int SQLite::_post(const tll_msg_t *msg, int flags)
 		return 0;
 
 	if (msg->type == TLL_MESSAGE_CONTROL) {
-		if (msg->msgid == sqlite_scheme::table_name::id) {
-			_select_message = _messages.at(((sqlite_scheme::table_name*) msg->data)->msgid).first;
+		if (msg->msgid == sqlite_scheme::TableName::id) {
+			_select_message = _messages.at(((const sqlite_scheme::TableName*) msg->data)->msgid).first;
 			if (_create_select_statement(std::string_view(_select_message->name))) {
 				return EINVAL;
 			}
@@ -490,7 +490,7 @@ int SQLite::_process(long timeout, int flags) {
 		return 0;
 	} else if (result == SQLITE_DONE) {
 		_update_dcaps(0, dcaps::Process | dcaps::Pending);
-		tll_msg_t msg = {TLL_MESSAGE_CONTROL, sqlite_scheme::data_end::id};
+		tll_msg_t msg = {TLL_MESSAGE_CONTROL, sqlite_scheme::EndOfData::id};
 		_callback(&msg);
 		SQLite::_close();
 		return 0;
