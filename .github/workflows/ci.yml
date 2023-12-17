@@ -6,16 +6,18 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-18.04, ubuntu-20.04]
+        os: [ubuntu-20.04, ubuntu-22.04]
         compiler: [gcc]
     runs-on: ${{ matrix.os }}
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         fetch-depth: 1
-    - uses: actions/cache@v2
+    - uses: actions/cache@v3
       with:
-        path: /home/runner/.ccache
+        path: |
+          /home/runner/.ccache
+          /home/runner/.cache/ccache
         key: ccache:${{ matrix.os }}:${{ github.sha }}
         restore-keys: 'ccache:${{ matrix.os }}:'
     - name: update
