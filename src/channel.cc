@@ -48,17 +48,6 @@ class SQLite : public SQLBase<SQLite>
 	int _create_statement(std::string_view table, const tll::scheme::Message *);
 	int _create_index(const std::string_view &name, std::string_view key, bool unique);
 	int _create_select_statement(std::string_view _table);
-
-	sqlite3_stmt * _prepare(const std::string_view query)
-	{
-		_log.debug("Prepare SQL statement:\n\t{}", query);
-		sqlite3_stmt * sql = nullptr;
-		const char * tail = nullptr;
-		auto r = sqlite3_prepare_v2(_db.get(), query.data(), query.size(), &sql, &tail);
-		if (r != SQLITE_OK)
-			return _log.fail(nullptr, "Failed to prepare statement: {}\n\t{}", sqlite3_errmsg(_db.get()), query);
-		return sql;
-	}
 };
 
 int SQLite::_init(const Channel::Url &url, Channel * master)

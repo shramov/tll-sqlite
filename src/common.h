@@ -4,6 +4,9 @@
 #include <sqlite3.h>
 
 #include <memory>
+#include <string>
+
+#include <tll/channel/base.h>
 
 // clang-format off
 struct sqlite3_delete { void operator ()(sqlite3 *ptr) const { sqlite3_close(ptr); } };
