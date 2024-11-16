@@ -25,7 +25,7 @@ SCHEME = '''yamls://
 @pytest.fixture
 def context():
     ctx = Context()
-    ctx.load(os.path.join(os.environ.get("BUILD_DIR", "build"), "tll-jsqlite"), 'channel_module')
+    ctx.load(os.path.join(os.environ.get("BUILD_DIR", "build"), "tll-jsqlite"))
     return ctx
 
 @pytest.fixture
