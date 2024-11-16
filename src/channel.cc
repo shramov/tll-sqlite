@@ -462,8 +462,11 @@ int SQLite::_process(long timeout, int flags) {
 	int result = sqlite3_step(_select_statement.get()); // 100 AS SQLITE_ROW, 101 AS SQLITE_DONE
 
 	if (result == SQLITE_ROW) {
-		tll_msg_t msg = {TLL_MESSAGE_DATA, _select_message->msgid,
-			sqlite3_column_int64(_select_statement.get(), 0)};
+		tll_msg_t msg = {
+			.type = TLL_MESSAGE_DATA,
+			.msgid = _select_message->msgid,
+			.seq = sqlite3_column_int64(_select_statement.get(), 0)
+		};
 		std::vector<unsigned char> buf;
 		buf.resize(_select_message->size);
 		auto view = tll::make_view(buf);
@@ -479,7 +482,7 @@ int SQLite::_process(long timeout, int flags) {
 		return 0;
 	} else if (result == SQLITE_DONE) {
 		_update_dcaps(0, dcaps::Process | dcaps::Pending);
-		tll_msg_t msg = {TLL_MESSAGE_CONTROL, sqlite_scheme::EndOfData::id};
+		tll_msg_t msg = { .type = TLL_MESSAGE_CONTROL, .msgid = sqlite_scheme::EndOfData::id };
 		_callback(&msg);
 		SQLite::_close();
 		return 0;
