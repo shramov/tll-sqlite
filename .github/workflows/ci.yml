@@ -19,6 +19,10 @@ jobs:
           /home/runner/.cache/ccache
         key: ccache:${{ matrix.os }}:${{ github.sha }}
         restore-keys: 'ccache:${{ matrix.os }}:'
+    - name: disable man-db trigger # See https://github.com/actions/runner-images/issues/10977
+      run: |
+        echo "set man-db/auto-update false" | sudo debconf-communicate
+        sudo dpkg-reconfigure man-db
     - name: update
       run: |
         echo deb https://psha.org.ru/debian/ `echo ${{ matrix.os }} | tr -d -` contrib backports | sudo tee /etc/apt/sources.list.d/psha.org.ru.list
