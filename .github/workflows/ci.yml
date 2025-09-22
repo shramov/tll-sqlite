@@ -6,8 +6,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-20.04, ubuntu-22.04]
-        compiler: [gcc]
+        os: [ubuntu-24.04, ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v4
@@ -26,7 +25,7 @@ jobs:
         sudo wget -O/etc/apt/trusted.gpg.d/psha.org.ru.gpg https://psha.org.ru/debian/pubkey.gpg
         sudo apt update
     - name: install deps
-      run: sudo apt install ccache cmake meson pkg-config libfmt-dev libtll-dev libsqlite3-dev rapidjson-dev python3-distutils python3-pytest python3-tll
+      run: sudo apt install ccache cmake meson pkg-config libfmt-dev libtll-dev libsqlite3-dev rapidjson-dev python3-pytest python3-tll
     - name: configure
       run: meson build
     - name: build
